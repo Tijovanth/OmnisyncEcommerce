@@ -1,0 +1,57 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: api_gateway
+
+  cloud:
+    gateway:
+      routes:
+        - id: order_service
+          uri: lb://order-service
+          predicates:
+            - Path=/api/v1/orders/**
+          filters:
+            - TokenRelay=
+        - id: payments_service
+          uri: lb://payments-service
+          predicates:
+            - Path=/api/v1/payments/**
+          filters:
+            - TokenRelay=
+        - id: inventory_service
+          uri: lb://inventory-service
+          predicates:
+            - Path=/api/v1/categories/**, /api/v1/products/**
+          filters:
+            - TokenRelay=
+
+  security:
+    oauth2:
+      client:
+        provider:
+          keycloak:
+            issuer-uri: ${KEYCLOAK_URI:http://localhost:8085}/realms/omnisync-realm
+        registration:
+          keycloak:
+            client-id: omnisync-client
+            client-secret: ${KEYCLOAK_SECRET:XbZsx1W4SJIuotE9dyiZbpY43aULZUv3}
+            scope: openid, profile, email, roles
+            authorization-grant-type: authorization_code
+eureka:
+  client:
+    serviceUrl:
+      defaultZone: ${EUREKA_URL:http://localhost:8761/eureka/}
+  instance:
+    preferIpAddress: true
+
+management:
+  tracing:
+    sampling:
+      probability: 1.0
+  otlp:
+    tracing:
+      endpoint: ${OTLP_URI:http://localhost:4318}/v1/traces
+      export:
+        enabled: true

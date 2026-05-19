@@ -1,0 +1,34 @@
+# Ignore the entire UI frontend when building the backend context
+omnisync-ui/
+node_modules/
+
+# Ignore database and infra configs not needed for Java compilation
+init.sql
+prometheus.yaml
+docker-compose.yaml
+.github/
+
+# Ignore Git and IDE files
+.git
+.idea/
+.vscode/
+*.iml
+
+# --- 4. Microservice Junk (Wildcards) ---
+**/.gitattributes
+**/.gitignore
+**/HELP.md
+**/mvnw.cmd
+**/.idea/
+**/.vscode/
+**/*.iml
+
+# Ignore ALL target folders in every microservice
+**/target/
+
+# Ignore the logstash folder
+logstash/
+
+# Ignore the notification service
+notification-service/
+

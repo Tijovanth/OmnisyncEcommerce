@@ -1,0 +1,102 @@
+server:
+  port: 8082
+
+spring:
+  application:
+    name: order-service
+  cloud:
+    openfeign:
+      httpclient:
+        hc5:
+          enabled: true
+      client:
+        product-service:
+          connect-timeout: 2000
+          read-timeout: 2000
+
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5433/order_db}
+    driver: org.postgresql.Driver
+    username: ${SPRING_DATASOURCE_USERNAME:tijo}
+    password: ${SPRING_DATASOURCE_PASSWORD:ojit1012@}
+
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: true
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+        format_sql: true
+        jdbc.batch_size: 50
+        order_updates: true
+        order_inserts: true
+    database-platform: org.hibernate.dialect.PostgreSQLDialect
+
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092,localhost:9094,localhost:9096}
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+      #transaction-id-prefix: tx-order-service-8082
+      acks: all
+    consumer:
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      group-id: order-service-group
+    properties:
+      spring.json.trusted.packages: "com.omnisync_ecommerce"
+      delivery.timeout.ms: 10000
+      request.timeout.ms: 5000
+      linger.ms: 5
+    listener:
+      observation-enabled: true
+    template:
+      observation-enabled: true
+
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: ${KEYCLOAK_URI:http://localhost:8085}/realms/omnisync-realm
+
+resilience4j:
+  retry:
+    instances:
+      productGetRetry:
+        max-attempts: 3
+        wait-duration: 1s
+        retry-exceptions:
+          - feign.RetryableException
+          - java.util.concurrent.TimeoutException
+          - java.net.ConnectException
+        ignore-exceptions:
+          - feign.FeignException.NotFound
+          - feign.FeignException.BadRequest
+  circuitbreaker:
+    instances:
+      inventory-service:
+        sliding-window-type: COUNT_BASED
+        sliding-window-size: 10
+        minimum-number-of-calls: 5
+        failure-rate-threshold: 50
+        wait-duration-in-open-state: 10s
+        permitted-number-of-calls-in-half-open-state: 3
+        automatic-transition-from-open-to-half-open-enabled: true
+
+eureka:
+  instance:
+    preferIpAddress: true
+  client:
+    serviceUrl:
+      defaultZone: ${EUREKA_URL:http://localhost:8761/eureka/}
+
+management:
+  tracing:
+    sampling:
+      probability: 1.0
+  otlp:
+    tracing:
+      endpoint: ${OTLP_URI:http://localhost:4318}/v1/traces
+      export:
+        enabled: true

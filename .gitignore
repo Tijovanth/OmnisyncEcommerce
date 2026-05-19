@@ -1,0 +1,10 @@
+**/target/
+**/*.log
+.idea/
+.vscode/
+*.iml
+.DS_Store
+
+**/node_modules/
+omnisync-ui/dist/
+omnisync-ui/.env*

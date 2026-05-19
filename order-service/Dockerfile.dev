@@ -1,0 +1,19 @@
+#Build
+FROM eclipse-temurin:17-jdk-alpine AS builder
+WORKDIR /build
+COPY order-service/mvnw .
+COPY order-service/.mvn .mvn
+COPY pom.xml .
+RUN chmod +x mvnw
+COPY order-service/pom.xml order-service/pom.xml
+RUN ./mvnw -f order-service/pom.xml dependency:go-offline -B
+COPY order-service/src order-service/src
+RUN ./mvnw -f order-service/pom.xml clean package -DskipTests
+
+#Run Time
+FROM eclipse-temurin:17-jre-alpine
+WORKDIR /app
+RUN addgroup -S appgroup && adduser -S appuser -G appgroup
+COPY --chown=appuser:appgroup --from=builder /build/order-service/target/*.jar order-service.jar
+USER appuser
+ENTRYPOINT ["java","-jar","order-service.jar"]

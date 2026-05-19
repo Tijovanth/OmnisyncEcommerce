@@ -1,0 +1,481 @@
+x-logging: &default-logging
+  driver: "json-file"
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  postgres-db:
+    image: postgres:15
+    container_name: omnisync-postgres
+    environment:
+      POSTGRES_USER: tijo
+      POSTGRES_PASSWORD: ojit1012@
+      POSTGRES_DB: order_db
+    ports:
+      - "5433:5432"
+    volumes:
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+      - postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+    networks:
+      - omnisyncecommerce-network
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U tijo -d inventory_db && pg_isready -U tijo -d order_db" ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    logging: *default-logging
+
+  jaeger:
+    image: jaegertracing/all-in-one
+    container_name: omnisync-jaeger
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+    ports:
+      - "16686:16686"
+      - "4317:4317"
+      - "4318:4318"
+    restart: unless-stopped
+    healthcheck:
+      test: [ "CMD", "wget", "--spider", "-q", "http://localhost:14269/" ]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - omnisyncecommerce-network
+    deploy:
+      resources:
+        limits:
+          memory: 400M
+        reservations:
+          memory: 200M
+    logging: *default-logging
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.11.1
+    container_name: elasticsearch
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+    ports:
+      - "9200:9200"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fs http://localhost:9200 >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 120s
+    networks:
+      - omnisyncecommerce-network
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+        reservations:
+          memory: 512M
+    logging: *default-logging
+
+  logstash:
+    image: docker.elastic.co/logstash/logstash:8.11.1
+    container_name: logstash
+    volumes:
+      - ./logstash/logstash.conf:/usr/share/logstash/pipeline/logstash.conf
+    ports:
+      - "5000:5000"
+    restart: unless-stopped
+    environment:
+      - "LS_JAVA_OPTS=-Xms256m -Xmx256m"
+    depends_on:
+        elasticsearch:
+          condition: service_healthy
+    networks:
+      - omnisyncecommerce-network
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 256M
+    logging: *default-logging
+
+  kibana:
+    image: docker.elastic.co/kibana/kibana:8.11.1
+    container_name: kibana
+    environment:
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+      - SERVER_MAX_PAYLOAD=1048576
+    ports:
+      - "5601:5601"
+    networks:
+      - omnisyncecommerce-network
+    restart: unless-stopped
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 800M
+        reservations:
+          memory: 400M
+    logging: *default-logging
+
+  kafka-1-init:
+    image: alpine:latest
+    container_name: kafka-node-1-init
+    user: root
+    command: chown -R 1000:1000 /tmp/kafka-logs
+    volumes:
+      - kafka_1_data:/tmp/kafka-logs
+
+  kafka-1:
+    image: apache/kafka:latest
+    container_name: kafka-node-1
+    ports:
+      - "9092:9092"
+    environment:
+      - CLUSTER_ID="OmniSyncCluster12345678"
+      - KAFKA_NODE_ID=1
+      - KAFKA_PROCESS_ROLES=broker,controller
+      - KAFKA_CONTROLLER_QUORUM_VOTERS=1@kafka-node-1:9093,2@kafka-node-2:9093,3@kafka-node-3:9093
+      - KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT
+      - KAFKA_LISTENERS=INTERNAL://:29092,EXTERNAL://:9092,CONTROLLER://:9093
+      - KAFKA_ADVERTISED_LISTENERS=INTERNAL://kafka-node-1:29092,EXTERNAL://localhost:9092,CONTROLLER://kafka-node-1:9093
+      - KAFKA_INTER_BROKER_LISTENER_NAME=INTERNAL
+      - KAFKA_CONTROLLER_LISTENER_NAMES=CONTROLLER
+    volumes:
+      - kafka_1_data:/tmp/kafka-logs
+    networks:
+      - omnisyncecommerce-network
+    depends_on:
+      kafka-1-init:
+        condition: service_completed_successfully
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 256M
+    logging: *default-logging
+
+  kafka-2-init:
+    image: alpine:latest
+    container_name: kafka-node-2-init
+    user: root
+    command: chown -R 1000:1000 /tmp/kafka-logs
+    volumes:
+      - kafka_2_data:/tmp/kafka-logs
+
+  kafka-2:
+    image: apache/kafka:latest
+    container_name: kafka-node-2
+    ports:
+      - "9094:9094"
+    environment:
+      - CLUSTER_ID="OmniSyncCluster12345678"
+      - KAFKA_NODE_ID=2
+      - KAFKA_PROCESS_ROLES=broker,controller
+      - KAFKA_CONTROLLER_QUORUM_VOTERS=1@kafka-node-1:9093,2@kafka-node-2:9093,3@kafka-node-3:9093
+      - KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT
+      - KAFKA_LISTENERS=INTERNAL://:29094,EXTERNAL://:9094,CONTROLLER://:9093
+      - KAFKA_ADVERTISED_LISTENERS=INTERNAL://kafka-node-2:29094,EXTERNAL://localhost:9094,CONTROLLER://kafka-node-2:9093
+      - KAFKA_INTER_BROKER_LISTENER_NAME=INTERNAL
+      - KAFKA_CONTROLLER_LISTENER_NAMES=CONTROLLER
+    volumes:
+      - kafka_2_data:/tmp/kafka-logs
+    networks:
+      - omnisyncecommerce-network
+    depends_on:
+      kafka-2-init:
+        condition: service_completed_successfully
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 256M
+    logging: *default-logging
+
+  kafka-3-init:
+    image: alpine:latest
+    container_name: kafka-node-3-init
+    user: root
+    command: chown -R 1000:1000 /tmp/kafka-logs
+    volumes:
+      - kafka_3_data:/tmp/kafka-logs
+
+  kafka-3:
+    image: apache/kafka:latest
+    container_name: kafka-node-3
+    ports:
+      - "9096:9096"
+    environment:
+      - CLUSTER_ID="OmniSyncCluster12345678"
+      - KAFKA_NODE_ID=3
+      - KAFKA_PROCESS_ROLES=broker,controller
+      - KAFKA_CONTROLLER_QUORUM_VOTERS=1@kafka-node-1:9093,2@kafka-node-2:9093,3@kafka-node-3:9093
+      - KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT
+      - KAFKA_LISTENERS=INTERNAL://:29096,EXTERNAL://:9096,CONTROLLER://:9093
+      - KAFKA_ADVERTISED_LISTENERS=INTERNAL://kafka-node-3:29096,EXTERNAL://localhost:9096,CONTROLLER://kafka-node-3:9093
+      - KAFKA_INTER_BROKER_LISTENER_NAME=INTERNAL
+      - KAFKA_CONTROLLER_LISTENER_NAMES=CONTROLLER
+    volumes:
+      - kafka_3_data:/tmp/kafka-logs
+    networks:
+      - omnisyncecommerce-network
+    depends_on:
+      kafka-3-init:
+        condition: service_completed_successfully
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 256M
+    logging: *default-logging
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:latest
+    container_name: keycloak
+    environment:
+      - KEYCLOAK_ADMIN=admin
+      - KEYCLOAK_ADMIN_PASSWORD=admin
+      - KC_DB=postgres
+      - KC_DB_URL=jdbc:postgresql://postgres-db:5432/keycloak_db
+      - KC_DB_USERNAME=tijo
+      - KC_DB_PASSWORD=ojit1012@
+      # wF7BxywUX3aRNUXpc8GbGjsT9MZCmejl Client Secret
+    ports:
+      - "8085:8080"
+    command: start-dev
+    volumes:
+      - keycloak_data:/opt/keycloak/data
+    depends_on:
+      - postgres-db
+    networks:
+      - omnisyncecommerce-network
+    deploy:
+      resources:
+        limits:
+          memory: 768M
+        reservations:
+          memory: 512M
+    logging: *default-logging
+
+  eureka-server:
+    build:
+      context: .
+      dockerfile: eureka-server/Dockerfile.dev
+    container_name: eureka-server
+    ports:
+      - "8761:8761"
+    healthcheck:
+      test: [ "CMD-SHELL", "wget -qO- http://localhost:8761/actuator/health | grep UP || exit 1" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 120s
+    restart: on-failure:5
+    networks:
+      - omnisyncecommerce-network
+    deploy:
+      resources:
+        limits:
+          memory: 400M
+        reservations:
+          memory: 256M
+    logging: *default-logging
+
+  api_gateway:
+    build:
+      context: .
+      dockerfile: api_gateway/Dockerfile.dev
+    container_name: api_gateway
+    ports:
+      - "8080:8080"
+    environment:
+      - KEYCLOAK_URI=http://host.docker.internal:8085
+      - OTLP_URI=http://jaeger:4318
+      - EUREKA_URL=http://eureka-server:8761/eureka/
+    healthcheck:
+      test: [ "CMD-SHELL", "wget -qO- http://localhost:8080/actuator/health | grep -i UP || exit 1" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 120s
+    restart: on-failure:5
+    depends_on:
+      eureka-server:
+        condition: service_healthy
+      jaeger:
+        condition: service_healthy
+    networks:
+      - omnisyncecommerce-network
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 300M
+    logging: *default-logging
+
+  order-service:
+    build:
+      context: .
+      dockerfile: order-service/Dockerfile.dev
+    container_name: order-service
+    ports:
+      - "8082:8082"
+    environment:
+      - JAVA_TOOL_OPTIONS=-Xmx256m
+      - SPRING_DATASOURCE_URL=jdbc:postgresql://postgres-db:5432/order_db
+      - SPRING_DATASOURCE_USERNAME=tijo
+      - SPRING_DATASOURCE_PASSWORD=ojit1012@
+      - EUREKA_URL=http://eureka-server:8761/eureka/
+      - KAFKA_BOOTSTRAP_SERVERS=kafka-1:29092,kafka-2:29094,kafka-3:29096
+      - KEYCLOAK_URI=http://host.docker.internal:8085
+      - OTLP_URI=http://jaeger:4318
+    depends_on:
+      postgres-db:
+        condition: service_healthy
+      eureka-server:
+        condition: service_healthy
+      jaeger:
+        condition: service_healthy
+    networks:
+      - omnisyncecommerce-network
+    healthcheck:
+      test: [ "CMD-SHELL", "wget -qO- http://localhost:8082/actuator/health | grep -i UP || exit 1" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 120s
+    restart: on-failure:5
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.1'
+          memory: 256M
+    logging: *default-logging
+
+  inventory-service:
+    build:
+      context: .
+      dockerfile: inventory-service/Dockerfile.dev
+    container_name: inventory-service
+    ports:
+      - "8081:8081"
+    environment:
+      - JAVA_TOOL_OPTIONS=-Xmx256m
+      - SPRING_DATASOURCE_URL=jdbc:postgresql://postgres-db:5432/inventory_db
+      - SPRING_DATASOURCE_USERNAME=tijo
+      - SPRING_DATASOURCE_PASSWORD=ojit1012@
+      - EUREKA_URL=http://eureka-server:8761/eureka/
+      - KAFKA_BOOTSTRAP_SERVERS=kafka-1:29092,kafka-2:29094,kafka-3:29096
+      - KEYCLOAK_URI=http://host.docker.internal:8085
+      - OTLP_URI=http://jaeger:4318
+    depends_on:
+      postgres-db:
+        condition: service_healthy
+      eureka-server:
+        condition: service_healthy
+      jaeger:
+        condition: service_healthy
+    networks:
+      - omnisyncecommerce-network
+    healthcheck:
+      test: [ "CMD-SHELL", "wget -qO- http://localhost:8081/actuator/health | grep -i UP || exit 1" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 120s
+    restart: on-failure:5
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.1'
+          memory: 256M
+    logging: *default-logging
+
+  payments-service:
+    build:
+      context: .
+      dockerfile: payments-service/Dockerfile.dev
+    container_name: payments-service
+    ports:
+      - "8084:8084"
+    environment:
+      - JAVA_TOOL_OPTIONS=-Xmx256m
+      - SPRING_DATASOURCE_URL=jdbc:postgresql://postgres-db:5432/payments_db
+      - SPRING_DATASOURCE_USERNAME=tijo
+      - SPRING_DATASOURCE_PASSWORD=ojit1012@
+      - EUREKA_URL=http://eureka-server:8761/eureka/
+      - KAFKA_BOOTSTRAP_SERVERS=kafka-1:29092,kafka-2:29094,kafka-3:29096
+      - KEYCLOAK_URI=http://host.docker.internal:8085
+      - OTLP_URI=http://jaeger:4318
+    depends_on:
+      postgres-db:
+        condition: service_healthy
+      eureka-server:
+        condition: service_healthy
+      jaeger:
+        condition: service_healthy
+    networks:
+      - omnisyncecommerce-network
+    healthcheck:
+      test: [ "CMD-SHELL", "wget -qO- http://localhost:8084/actuator/health | grep -i UP || exit 1" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 120s
+    restart: on-failure:5
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.1'
+          memory: 256M
+    logging: *default-logging
+
+  omnisync-ui:
+    build:
+      context: ./omnisync-ui
+      dockerfile: Dockerfile.dev
+    container_name: omnisync-ui
+    ports:
+      - "3000:80"
+    networks:
+      - omnisyncecommerce-network
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+        reservations:
+          memory: 128M
+    logging: *default-logging
+
+
+volumes:
+  postgres_data:
+  kafka_1_data:
+  kafka_2_data:
+  kafka_3_data:
+  keycloak_data:
+
+networks:
+  omnisyncecommerce-network:
+   driver: bridge
+
+
+
